@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Online Photobooth Clone</title>
+    <!-- Sử dụng Tailwind CSS để làm giao diện nhanh, đẹp -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Hiệu ứng flash khi chụp ảnh */
+        .flash {
+            animation: flashAnimation 0.5s ease-out;
+        }
+        @keyframes flashAnimation {
+            0% { background-color: rgba(255, 255, 255, 1); }
+            100% { background-color: rgba(255, 255, 255, 0); }
+        }
+        
+        /* Giao diện dải ảnh (Photo Strip 1x4) */
+        #strip-container {
+            background-color: #f3f4f6; /* Màu nền của khung (có thể thay bằng ảnh frame) */
+            padding: 10px;
+            width: 240px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .captured-photo {
+            width: 100%;
+            height: 160px;
+            object-fit: cover;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            background-color: #d1d5db;
+        }
+        .captured-photo:last-child {
+            margin-bottom: 0;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center py-10 font-sans">
+
+    <!-- Header -->
+    <div class="text-center mb-6">
+        <h1 class="text-3xl font-bold text-gray-800">📸 Photobooth Online</h1>
+        <p class="text-gray-500 mt-2">Chụp 4 ô lấy liền - Không cần app</p>
+    </div>
+
+    <div class="flex flex-col md:flex-row gap-8 items-start w-full max-w-4xl px-4">
+        
+        <!-- Cột trái: Camera & Nút bấm -->
+        <div class="flex-1 bg-white p-4 rounded-xl shadow-md w-full relative">
+            <!-- Vùng hiển thị Camera -->
+            <div id="camera-container" class="relative w-full aspect-[4/3] bg-black rounded-lg overflow-hidden flex justify-center items-center">
+                <video id="video" class="w-full h-full object-cover transform scale-x-[-1]" autoplay playsinline></video>
+                
+                <!-- Lớp phủ Flash -->
+                <div id="flash-overlay" class="absolute inset-0 pointer-events-none"></div>
+                
+                <!-- Số đếm ngược -->
+                <div id="countdown" class="absolute text-white text-6xl font-bold drop-shadow-lg hidden">3</div>
+            </div>
+
+            <!-- Controls -->
+            <div class="mt-6 flex justify-center">
+                <button id="start-btn" class="bg-pink-500 hover:bg-pink-600 text-white font-semibold py-3 px-8 rounded-full shadow-lg transition-transform transform hover:scale-105">
+                    Bắt đầu chụp (4 ảnh)
+                </button>
+            </div>
+            <p id="status-text" class="text-center text-sm text-gray-500 mt-3"></p>
+        </div>
+
+        <!-- Cột phải: Kết quả (Photo Strip) -->
+        <div class="flex flex-col items-center">
+            <h2 class="text-lg font-semibold mb-3 text-gray-700">Dải ảnh của bạn</h2>
+            
+            <!-- Vùng chứa dải ảnh 1x4 -->
+            <div id="strip-container" class="rounded-lg">
+                <img id="photo-1" class="captured-photo" />
+                <img id="photo-2" class="captured-photo" />
+                <img id="photo-3" class="captured-photo" />
+                <img id="photo-4" class="captured-photo" />
+            </div>
+
+            <!-- Nút Tải về (Ban đầu ẩn) -->
+            <button id="download-btn" class="mt-6 bg-gray-800 hover:bg-black text-white font-semibold py-2 px-6 rounded-lg hidden transition">
+                ⬇️ Tải ảnh về máy
+            </button>
+        </div>
+    </div>
+
+    <!-- Canvas ẩn dùng để xử lý hình ảnh -->
+    <canvas id="canvas" class="hidden"></canvas>
+    <!-- Canvas ẩn dùng để ghép dải ảnh trước khi tải -->
+    <canvas id="strip-canvas" class="hidden"></canvas>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        const startBtn = document.getElementById('start-btn');
+        const downloadBtn = document.getElementById('download-btn');
+        const countdownEl = document.getElementById('countdown');
+        const flashOverlay = document.getElementById('flash-overlay');
+        const statusText = document.getElementById('status-text');
+
+        let stream = null;
+        let photos = [];
+        const TOTAL_PHOTOS = 4;
+
+        // Bật Camera ngay khi load trang
+        async function initCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { facingMode: "user", width: 1280, height: 960 } 
+                });
+                video.srcObject = stream;
+            } catch (err) {
+                alert("Không thể truy cập Camera. Vui lòng cấp quyền!");
+                console.error(err);
+            }
+        }
+
+        // Hàm đợi theo giây
+        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+        // Hàm chụp 1 tấm ảnh
+        function takeSnap(index) {
+            // Lấy kích thước video thực tế
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // Lật canvas lại vì video đang bị lật gương (scale-x-[-1])
+            ctx.translate(canvas.width, 0);
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Chớp flash
+            flashOverlay.classList.remove('flash');
+            void flashOverlay.offsetWidth; // Trigger reflow
+            flashOverlay.classList.add('flash');
+
+            // Lưu ảnh vào mảng và hiển thị lên giao diện
+            const dataUrl = canvas.toDataURL('image/png');
+            photos.push(dataUrl);
+            document.getElementById(`photo-${index + 1}`).src = dataUrl;
+        }
+
+        // Quy trình đếm ngược 3 giây
+        async function countdownAndShoot(index) {
+            countdownEl.classList.remove('hidden');
+            for (let i = 3; i > 0; i--) {
+                countdownEl.innerText = i;
+                await wait(1000);
+            }
+            countdownEl.classList.add('hidden');
+            takeSnap(index);
+        }
+
+        // Bắt đầu chuỗi chụp 4 tấm
+        startBtn.addEventListener('click', async () => {
+            if (!stream) {
+                alert("Camera chưa sẵn sàng!");
+                return;
+            }
+
+            // Reset trạng thái
+            photos = [];
+            startBtn.disabled = true;
+            startBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            downloadBtn.classList.add('hidden');
+            for(let i = 1; i <= 4; i++) {
+                document.getElementById(`photo-${i}`).src = '';
+            }
+
+            statusText.innerText = "Chuẩn bị tạo dáng nhé...";
+            await wait(2000);
+
+            // Vòng lặp chụp 4 lần
+            for (let i = 0; i < TOTAL_PHOTOS; i++) {
+                statusText.innerText = `Đang chụp ảnh ${i + 1}/${TOTAL_PHOTOS}`;
+                await countdownAndShoot(i);
+                if (i < TOTAL_PHOTOS - 1) {
+                    await wait(1000); // Đợi 1 giây trước khi đếm ngược tấm tiếp theo
+                }
+            }
+
+            statusText.innerText = "Hoàn tất! Bạn có thể tải ảnh xuống.";
+            startBtn.disabled = false;
+            startBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            downloadBtn.classList.remove('hidden');
+        });
+
+        // Hàm ghép 4 ảnh thành 1 file PNG để tải xuống
+        downloadBtn.addEventListener('click', () => {
+            const stripCanvas = document.getElementById('strip-canvas');
+            const sCtx = stripCanvas.getContext('2d');
+            
+            // Kích thước dải ảnh (tùy chỉnh)
+            const padding = 20;
+            const imgWidth = 600;
+            const imgHeight = 450;
+            
+            stripCanvas.width = imgWidth + (padding * 2);
+            stripCanvas.height = (imgHeight * 4) + (padding * 5); // 4 ảnh + khoảng trống
+            
+            // Tô màu nền cho dải ảnh
+            sCtx.fillStyle = '#ffffff'; // Nền trắng
+            sCtx.fillRect(0, 0, stripCanvas.width, stripCanvas.height);
+
+            // Vẽ từng ảnh lên Canvas tổng
+            let loadedCount = 0;
+            photos.forEach((photoSrc, index) => {
+                const img = new Image();
+                img.src = photoSrc;
+                img.onload = () => {
+                    const yPos = padding + (index * (imgHeight + padding));
+                    sCtx.drawImage(img, padding, yPos, imgWidth, imgHeight);
+                    loadedCount++;
+                    
+                    // Khi vẽ xong ảnh cuối cùng thì tải xuống
+                    if (loadedCount === TOTAL_PHOTOS) {
+                        const link = document.createElement('a');
+                        link.download = `photobooth-${Date.now()}.png`;
+                        link.href = stripCanvas.toDataURL('image/png');
+                        link.click();
+                    }
+                };
+            });
+        });
+
+        // Khởi động camera
+        initCamera();
+    </script>
+</body>
+</html>
